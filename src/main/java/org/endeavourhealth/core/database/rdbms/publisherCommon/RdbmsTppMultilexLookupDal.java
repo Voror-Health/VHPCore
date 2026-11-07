@@ -154,6 +154,11 @@ public class RdbmsTppMultilexLookupDal implements TppMultilexLookupDalI {
         }
     }
 
+    /**
+     * the tpp_multilex_action_group_lookup table provides a lookup for the action group name for the given ID
+     * NOTE: this lookup was populated using a one-off dump taken from SystmOne and is not updated as part of the
+     * regular SystmOne extract process
+     */
     @Override
     public String getMultilexActionGroupNameForId(int actionGroupId) throws Exception {
 

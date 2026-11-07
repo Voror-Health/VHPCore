@@ -250,7 +250,6 @@
         <class>org.endeavourhealth.core.database.rdbms.reference.models.RdbmsEncounterCode</class>
         <class>org.endeavourhealth.core.database.rdbms.reference.models.RdbmsLsoaLookup</class>
         <class>org.endeavourhealth.core.database.rdbms.reference.models.RdbmsMsoaLookup</class>
-        <class>org.endeavourhealth.core.database.rdbms.reference.models.RdbmsPostcodeLookup</class>
         <class>org.endeavourhealth.core.database.rdbms.reference.models.RdbmsOpcs4Lookup</class>
         <class>org.endeavourhealth.core.database.rdbms.reference.models.RdbmsIcd10Lookup</class>
         <class>org.endeavourhealth.core.database.rdbms.reference.models.RdbmsSnomedToBnfChapterLookup</class>
@@ -315,8 +314,6 @@
     <persistence-unit name="DataGeneratorDb">
         <provider>org.hibernate.jpa.HibernatePersistenceProvider</provider>
 
-        <class>org.endeavourhealth.core.database.rdbms.datagenerator.models.RdbmsSubscriberZipFileUUIDs</class>
-
         <properties>
             <property name="hibernate.dialect" value="org.hibernate.dialect.MySQLDialect"/>
             <property name="hibernate.show_sql" value="false" />
@@ -346,6 +343,7 @@
         <class>org.endeavourhealth.core.database.rdbms.usermanager.models.UserProjectEntity</class>
         <class>org.endeavourhealth.core.database.rdbms.usermanager.models.UserRegionEntity</class>
         <class>org.endeavourhealth.core.database.rdbms.usermanager.models.UserApplicationPolicyEntity</class>
+        <class>org.endeavourhealth.core.database.rdbms.usermanager.models.UserApplicationProjectEntity</class>
         <properties>
             <property name="hibernate.dialect" value="org.hibernate.dialect.MySQLDialect"/>
             <property name="hibernate.show_sql" value="false" />

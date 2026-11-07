@@ -127,6 +127,8 @@ public class RdbmsEmisUserInRoleDal implements EmisUserInRoleDalI {
         //if we get an exchange with a large update to this table, it can lock it for long enough for other apps
         //to timeout, so give them another go
         DeadlockHandler h = new DeadlockHandler();
+        h.setDelayBackOff(true); //SD-779 - Gives the process more time to complete to prevent lock timeouts when 5+ larger extract are processing
+        h.setMaxAttempts(10);    //As above. This was also done for TPP staff file (SD-408) so keeps the approaches consistent
         h.setRetryDelaySeconds(30); //give it long enough for the other thing to finish
 
         while (true) {

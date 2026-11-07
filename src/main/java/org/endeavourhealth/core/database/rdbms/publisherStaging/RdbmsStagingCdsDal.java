@@ -3,6 +3,7 @@ package org.endeavourhealth.core.database.rdbms.publisherStaging;
 import org.endeavourhealth.core.database.dal.publisherStaging.StagingCdsDalI;
 import org.endeavourhealth.core.database.dal.publisherStaging.models.*;
 import org.endeavourhealth.core.database.rdbms.ConnectionManager;
+import org.endeavourhealth.core.database.rdbms.DeadlockHandler;
 import org.hibernate.internal.SessionImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -350,6 +351,22 @@ public class RdbmsStagingCdsDal implements StagingCdsDalI {
 
     @Override
     public void saveProcedures(List<StagingProcedureCds> cdses, UUID serviceId) throws Exception {
+
+        //SD-499 keep getting deadlocks here, to give it a few attempts
+        DeadlockHandler h = new DeadlockHandler();
+
+        while (true) {
+            try {
+                saveProceduresImpl(cdses, serviceId);
+                break;
+
+            } catch (Exception ex) {
+                h.handleError(ex);
+            }
+        }
+    }
+
+    public void saveProceduresImpl(List<StagingProcedureCds> cdses, UUID serviceId) throws Exception {
 
         List<StagingProcedureCds> toSave = new ArrayList<>();
 

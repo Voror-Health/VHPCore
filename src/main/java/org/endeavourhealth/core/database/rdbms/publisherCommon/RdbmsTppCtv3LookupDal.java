@@ -5,6 +5,7 @@ import org.endeavourhealth.common.utility.FileHelper;
 import org.endeavourhealth.core.database.dal.publisherCommon.TppCtv3LookupDalI;
 import org.endeavourhealth.core.database.dal.publisherCommon.models.TppCtv3Lookup;
 import org.endeavourhealth.core.database.rdbms.ConnectionManager;
+import org.endeavourhealth.core.database.rdbms.DeadlockHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -84,7 +85,7 @@ public class RdbmsTppCtv3LookupDal implements TppCtv3LookupDalI {
             String sql = "CREATE TABLE " + tempTableName + " ("
                     + "RowIdentifier int, "
                     + "IDOrganisationVisibleTo varchar(255), "
-                    + "Ctv3Code varchar(255) binary, "
+                    + "Ctv3Code varchar(5) binary, "
                     + "Ctv3Text varchar(255), "
                     + "RemovedData int, "
                     + "key_exists boolean DEFAULT FALSE, "
@@ -125,13 +126,13 @@ public class RdbmsTppCtv3LookupDal implements TppCtv3LookupDalI {
             statement.executeUpdate(sql);
             statement.close();
 
-            //update any records that previously existed, but have a changed term
+            //update any records that previously existed, but may have a changed term and set the latest dt_last_updated (SD-781)
             //LOG.debug("Updating existing records in target table tpp_ctv3_lookup_2");
             sql = "UPDATE tpp_ctv3_lookup_2 t"
                     + " INNER JOIN " + tempTableName + " s"
                     + " ON t.ctv3_code = s.Ctv3Code"
                     + " SET t.ctv3_term = s.Ctv3Text, t.dt_last_updated = " + ConnectionManager.formatDateString(dataDate, true)
-                    + " WHERE t.dt_last_updated < " + ConnectionManager.formatDateString(dataDate, true);
+                    + " WHERE dt_last_updated < " + ConnectionManager.formatDateString(dataDate, true);
             statement = connection.createStatement(); //one-off SQL due to table name, so don't use prepared statement
             statement.executeUpdate(sql);
             statement.close();
@@ -151,58 +152,38 @@ public class RdbmsTppCtv3LookupDal implements TppCtv3LookupDalI {
         }
     }
 
-    /*@Override
-    public void save(TppCtv3Lookup ctv3Lookup) throws Exception {
-        if (ctv3Lookup == null) {
-            throw new IllegalArgumentException("ctv3 lookup is null");
-        }
+    @Override
+    public Date getMostRecentCtv3CodeDate() throws Exception {
+        DeadlockHandler h = new DeadlockHandler();
+        h.setRetryDelaySeconds(30); //give it long enough for the other thing to finish
 
-        List<TppCtv3Lookup> l = new ArrayList<>();
-        l.add(ctv3Lookup);
-        save(l);
+        while (true) {
+            try {
+                return getMostRecentCtv3CodeDateImpl();
+
+            } catch (Exception ex) {
+                h.handleError(ex);
+            }
+        }
     }
 
-    @Override
-    public void save(List<TppCtv3Lookup> ctv3Lookups) throws Exception {
-        if (ctv3Lookups == null || ctv3Lookups.isEmpty()) {
-            throw new IllegalArgumentException("ctv3 lookup is null or empty");
-        }
 
+    public Date getMostRecentCtv3CodeDateImpl() throws Exception {
         Connection connection = ConnectionManager.getPublisherCommonConnection();
         PreparedStatement ps = null;
         try {
-
-            String sql = "INSERT INTO tpp_ctv3_lookup "
-                    + " (ctv3_code, ctv3_text, audit_json)"
-                    + " VALUES (?, ?, ?)"
-                    + " ON DUPLICATE KEY UPDATE"
-                    + " ctv3_text = VALUES(ctv3_text),"
-                    + " audit_json = VALUES(audit_json)";
+            String sql = "SELECT MAX(dt_last_updated)"
+                    + " FROM tpp_ctv3_lookup_2";
 
             ps = connection.prepareStatement(sql);
+            //ps.executeQuery();
+            ResultSet rs = ps.executeQuery();
+            if (rs.next() && rs.getTimestamp(1) != null) {
+                return new java.util.Date(rs.getTimestamp(1).getTime());
 
-            for (TppCtv3Lookup lookup : ctv3Lookups) {
-
-                int col = 1;
-                // Only JSON audit field is nullable
-                ps.setString(col++, lookup.getCtv3Code());
-                ps.setString(col++, lookup.getCtv3Text());
-                if (lookup.getAudit() == null) {
-                    ps.setNull(col++, Types.VARCHAR);
-                } else {
-                    ps.setString(col++, lookup.getAudit().writeToJson());
-                }
-
-                ps.addBatch();
+            } else {
+                return null;
             }
-
-            ps.executeBatch();
-
-            connection.commit();
-
-        } catch (Exception ex) {
-            connection.rollback();
-            throw ex;
 
         } finally {
             if (ps != null) {
@@ -210,5 +191,5 @@ public class RdbmsTppCtv3LookupDal implements TppCtv3LookupDalI {
             }
             connection.close();
         }
-    }*/
+    }
 }

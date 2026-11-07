@@ -38,4 +38,21 @@ public class PublishedFileRecord {
     public void setByteLength(int byteLength) {
         this.byteLength = byteLength;
     }
+
+    @Override
+    public String toString() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[");
+        sb.append("File: ");
+        sb.append(publishedFileId);
+        sb.append(", Record: ");
+        sb.append(recordNumber);
+        sb.append(", Start: ");
+        sb.append(byteStart);
+        sb.append(", Len: ");
+        sb.append(byteLength);
+        sb.append("]");
+        return sb.toString();
+    }
+
 }

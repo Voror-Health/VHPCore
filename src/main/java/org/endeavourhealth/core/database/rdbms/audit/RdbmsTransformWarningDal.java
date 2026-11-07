@@ -230,9 +230,6 @@ public class RdbmsTransformWarningDal implements TransformWarningDalI {
             return null;
         } else {
             String ret = warningParams[index];
-            if (ret!=null && ret.length()>255) {
-                ret=ret.substring(0,254);
-            }
             return ret;
         }
     }

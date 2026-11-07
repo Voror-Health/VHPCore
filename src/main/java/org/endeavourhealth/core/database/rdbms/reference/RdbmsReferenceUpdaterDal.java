@@ -195,58 +195,7 @@ public class RdbmsReferenceUpdaterDal implements ReferenceUpdaterDalI {
         }
     }
 
-    @Override
-    public void updatePostcodeMap(String postcode, String lsoaCode, String msoaCode, String ward, String ccgCode, String localAuthority,
-                                  String lsoa2001Code, String lsoa2011Code, String msoa2001Code, String msoa2011Code) throws Exception {
 
-        //always make sure this is uppercase
-        postcode = postcode.toUpperCase();
-        String postcodeNoSpace = postcode.replace(" ", "");
-
-        EntityManager entityManager = ConnectionManager.getReferenceEntityManager();
-
-        try {
-            String sql = "select r"
-                    + " from RdbmsPostcodeLookup r"
-                    + " where r.postcodeNoSpace = :postcodeNoSpace";
-
-            Query query = entityManager
-                    .createQuery(sql, RdbmsPostcodeLookup.class)
-                    .setParameter("postcodeNoSpace", postcodeNoSpace);
-
-            RdbmsPostcodeLookup postcodeReference = null;
-
-            try {
-                postcodeReference = (RdbmsPostcodeLookup) query.getSingleResult();
-
-            } catch (NoResultException e) {
-                postcodeReference = new RdbmsPostcodeLookup();
-                postcodeReference.setPostcodeNoSpace(postcodeNoSpace);
-            }
-
-            postcodeReference.setPostcode(postcode);
-            postcodeReference.setCcgCode(ccgCode);
-            postcodeReference.setLsoaCode(lsoaCode);
-            postcodeReference.setMsoaCode(msoaCode);
-            postcodeReference.setWardCode(ward);
-            postcodeReference.setLocalAuthorityCode(localAuthority);
-            postcodeReference.setLsoa2001Code(lsoa2001Code);
-            postcodeReference.setLsoa2011Code(lsoa2011Code);
-            postcodeReference.setMsoa2001Code(msoa2001Code);
-            postcodeReference.setMsoa2011Code(msoa2011Code);
-
-            entityManager.getTransaction().begin();
-            entityManager.persist(postcodeReference);
-            entityManager.getTransaction().commit();
-
-        } catch (Exception ex) {
-            entityManager.getTransaction().rollback();
-            throw ex;
-
-        } finally {
-            entityManager.close();
-        }
-    }
 
     @Override
     public void updateDeprivationMap(DeprivationLookup proxy) throws Exception {

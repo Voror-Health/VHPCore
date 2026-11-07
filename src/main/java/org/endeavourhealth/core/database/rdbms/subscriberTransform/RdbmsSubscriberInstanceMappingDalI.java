@@ -4,6 +4,7 @@ import com.google.common.base.Strings;
 import org.endeavourhealth.common.fhir.ReferenceHelper;
 import org.endeavourhealth.core.database.dal.subscriberTransform.SubscriberInstanceMappingDalI;
 import org.endeavourhealth.core.database.rdbms.ConnectionManager;
+import org.endeavourhealth.core.database.rdbms.DeadlockHandler;
 import org.endeavourhealth.core.database.rdbms.subscriberTransform.models.RdbmsEnterpriseInstanceMap;
 import org.hl7.fhir.instance.model.ResourceType;
 import org.slf4j.Logger;
@@ -18,7 +19,7 @@ import java.util.UUID;
 
 public class RdbmsSubscriberInstanceMappingDalI implements SubscriberInstanceMappingDalI {
     private static final Logger LOG = LoggerFactory.getLogger(RdbmsSubscriberInstanceMappingDalI.class);
-
+    private static final String DUPLICATE_KEY_ERR = "Duplicate entry .* for key .*";    // 'PRIMARY'";  SD-1130
     private String subscriberConfigName = null;
 
     public RdbmsSubscriberInstanceMappingDalI(String subscriberConfigName) {
@@ -50,7 +51,21 @@ public class RdbmsSubscriberInstanceMappingDalI implements SubscriberInstanceMap
         /*if (Strings.isNullOrEmpty(mappingValue)) {
             throw new IllegalArgumentException("Cannot create instance mapping without a mapping value");
         }*/
+        DeadlockHandler handler = new DeadlockHandler();
+        handler.setRetryDelayMillis(500);
+        handler.addErrorMessageToHandler(DUPLICATE_KEY_ERR);
+        while (true) {
+            try {
+                return tryFindOrCreateInstanceMappedIds(resourceType, resourceId, mappingValue);
 
+            } catch (Exception ex) {
+                handler.handleError(ex);
+            }
+        }
+
+    }
+
+    public UUID tryFindOrCreateInstanceMappedIds(ResourceType resourceType, UUID resourceId, String mappingValue) throws Exception {
         EntityManager entityManager = ConnectionManager.getSubscriberTransformEntityManager(subscriberConfigName);
 
         try {
@@ -232,7 +247,7 @@ public class RdbmsSubscriberInstanceMappingDalI implements SubscriberInstanceMap
                 .setMaxResults(1);
 
         try {
-            RdbmsEnterpriseInstanceMap result = (RdbmsEnterpriseInstanceMap)query.getSingleResult();
+            RdbmsEnterpriseInstanceMap result = (RdbmsEnterpriseInstanceMap) query.getSingleResult();
             return result;
 
         } catch (NoResultException ex) {
@@ -255,7 +270,7 @@ public class RdbmsSubscriberInstanceMappingDalI implements SubscriberInstanceMap
                 .setMaxResults(1);
 
         try {
-            RdbmsEnterpriseInstanceMap result = (RdbmsEnterpriseInstanceMap)query.getSingleResult();
+            RdbmsEnterpriseInstanceMap result = (RdbmsEnterpriseInstanceMap) query.getSingleResult();
             return result;
 
         } catch (NoResultException ex) {

@@ -957,7 +957,86 @@ public class RdbmsExchangeDal implements ExchangeDalI {
         }
     }
 
+    @Override
     public List<JsonDDSOrganisationStatus> getOrganisationStatus(List<String> odsCodes, String agreementName) throws Exception {
+
+        List<JsonDDSOrganisationStatus> orgStatusList = new ArrayList<>();
+        Set<String> foundOdsCodes = new HashSet<>();
+
+        Connection connection = ConnectionManager.getAuditConnection();
+        PreparedStatement ps = null;
+        try {
+            String sql = "SELECT s.local_id, MAX(d.received_date),"
+                    + " IF (err.exchange_ids_in_error IS NULL, 0, 1)"
+                    + " FROM admin.service s"
+                    + " INNER JOIN audit.latest_data_received d"
+                    + " ON d.service_id = s.id"
+                    + " LEFT OUTER JOIN audit.exchange_transform_error_state err"
+                    + " ON err.service_id = s.id"
+                    + " WHERE s.local_id IN (";
+            for (int i=0; i<odsCodes.size(); i++) {
+                if (i>0) {
+                    sql += ", ";
+                }
+                sql += "?";
+            }
+            sql += ")"
+                    + " GROUP BY s.local_id"
+                    + " ORDER BY MAX(d.received_date) ASC"; //want most recent at the top
+            ps = connection.prepareStatement(sql);
+
+            int col = 1;
+            for (String odsCode: odsCodes) {
+                ps.setString(col++, odsCode);
+            }
+
+            DateFormat df = new SimpleDateFormat("yyyy-MM-dd");
+
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+
+                col = 1;
+
+                String odsCode = rs.getString(col++);
+                java.util.Date d = new java.util.Date(rs.getTimestamp(col++).getTime());
+                int err = rs.getInt(col++);
+
+                JsonDDSOrganisationStatus orgStatus = new JsonDDSOrganisationStatus();
+                orgStatus.setOdsCode(odsCode);
+                orgStatus.setLastReceived(df.format(d));
+                orgStatus.setInError(err == 1);
+                orgStatus.setReferenceAgreement(agreementName);
+                orgStatusList.add(orgStatus);
+
+                foundOdsCodes.add(odsCode);
+            }
+
+        } finally {
+            if (ps != null) {
+                ps.close();
+            }
+            connection.close();
+        }
+
+        //add any entries for ODS codes that weren't found (e.g. not set up in DDS-UI yet)
+        for (String odsCode: odsCodes) {
+            if (!foundOdsCodes.contains(odsCode)) {
+                JsonDDSOrganisationStatus orgStatus = new JsonDDSOrganisationStatus();
+                orgStatus.setOdsCode(odsCode);
+                orgStatus.setInError(false);
+                orgStatus.setReferenceAgreement(agreementName);
+                orgStatusList.add(orgStatus);
+            }
+        }
+
+        //populate the org names, CCGs etc.
+        fillOrganisationDetails(orgStatusList, odsCodes);
+        getCCG(orgStatusList, odsCodes);
+
+        return orgStatusList;
+    }
+
+    /*public List<JsonDDSOrganisationStatus> getOrganisationStatus(List<String> odsCodes, String agreementName) throws Exception {
 
         EntityManager entityManager = ConnectionManager.getAuditEntityManager();
 
@@ -1022,7 +1101,7 @@ public class RdbmsExchangeDal implements ExchangeDalI {
         fillOrganisationDetails(orgStatusList, odsCodes);
         getCCG(orgStatusList, odsCodes);
         return orgStatusList;
-    }
+    }*/
 
     private void fillOrganisationDetails(List<JsonDDSOrganisationStatus> orgs, List<String> odsCodes) throws Exception {
         List<OrganisationEntity> organisationEntities = OrganisationCache.getOrganisationDetailsFromOdsCodeList(odsCodes);

@@ -259,6 +259,87 @@ public class RdbmsEmisCodeDal implements EmisCodeDalI {
         }
     }
 
+    @Override
+    public Date getMostRecentClinicalCodeDate() throws Exception {
+        DeadlockHandler h = new DeadlockHandler();
+        h.setRetryDelaySeconds(30); //give it long enough for the other thing to finish
+
+        while (true) {
+            try {
+                return getMostRecentClinicalCodeDateImpl();
+
+            } catch (Exception ex) {
+                h.handleError(ex);
+            }
+        }
+    }
+
+
+    public Date getMostRecentClinicalCodeDateImpl() throws Exception {
+        Connection connection = ConnectionManager.getPublisherCommonConnection();
+        PreparedStatement ps = null;
+        try {
+            String sql = "SELECT MAX(dt_last_updated)"
+                    + " FROM emis_clinical_code";
+
+            ps = connection.prepareStatement(sql);
+            ps.executeQuery();
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                return new java.util.Date(rs.getTimestamp(1).getTime());
+
+            } else {
+                return null;
+            }
+
+        } finally {
+            if (ps != null) {
+                ps.close();
+            }
+            connection.close();
+        }
+    }
+
+    @Override
+    public Date getMostRecentDrugCodeDate() throws Exception {
+        DeadlockHandler h = new DeadlockHandler();
+        h.setRetryDelaySeconds(30); //give it long enough for the other thing to finish
+
+        while (true) {
+            try {
+                return getMostRecentDrugCodeDateImpl();
+
+            } catch (Exception ex) {
+                h.handleError(ex);
+            }
+        }
+    }
+
+    private Date getMostRecentDrugCodeDateImpl() throws Exception {
+        Connection connection = ConnectionManager.getPublisherCommonConnection();
+        PreparedStatement ps = null;
+        try {
+            String sql = "SELECT MAX(dt_last_updated)"
+                    + " FROM emis_drug_code";
+
+            ps = connection.prepareStatement(sql);
+            ps.executeQuery();
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                return new java.util.Date(rs.getTimestamp(1).getTime());
+
+            } else {
+                return null;
+            }
+
+        } finally {
+            if (ps != null) {
+                ps.close();
+            }
+            connection.close();
+        }
+    }
+
     private void updateDrugCodeTableImpl(String filePath, Date dataDate) throws Exception {
         long msStart = System.currentTimeMillis();
 
@@ -278,6 +359,7 @@ public class RdbmsEmisCodeDal implements EmisCodeDalI {
                     + "CodeId bigint, "
                     + "Term varchar(500), "
                     + "DmdProductCodeId varchar(255), "
+                    + "BNFChapterRef varchar(12), "    //SD-1073
                     + "ProcessingId int, "
                     + "key_exists boolean DEFAULT FALSE, "
                     + "CONSTRAINT pk PRIMARY KEY (CodeId), "

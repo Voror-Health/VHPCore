@@ -7,11 +7,13 @@ import org.endeavourhealth.core.database.dal.usermanager.UserApplicationPolicyDa
 import org.endeavourhealth.core.database.dal.usermanager.UserProjectDalI;
 import org.endeavourhealth.core.database.dal.usermanager.UserRegionDalI;
 import org.endeavourhealth.core.database.dal.usermanager.models.JsonApplicationPolicyAttribute;
-import org.endeavourhealth.core.database.rdbms.usermanager.models.UserApplicationPolicyEntity;
-import org.endeavourhealth.core.database.rdbms.usermanager.models.UserProjectEntity;
-import org.endeavourhealth.core.database.rdbms.usermanager.models.UserRegionEntity;
 import org.endeavourhealth.core.database.dal.usermanager.models.JsonUser;
+import org.endeavourhealth.core.database.rdbms.usermanager.RdbmsCoreUserProjectDal;
+import org.endeavourhealth.core.database.rdbms.usermanager.models.*;
+import org.keycloak.representations.idm.RealmRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -19,6 +21,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class UserCache {
+    private static final Logger LOG = LoggerFactory.getLogger(UserCache.class);
 
     private static Map<String, UserRepresentation> userMap = new ConcurrentHashMap<>();
     private static Map<String, String> userApplicationPolicyIdMap = new ConcurrentHashMap<>();
@@ -45,6 +48,23 @@ public class UserCache {
 
             try {
                 UserRepresentation user = keycloakClient.realms().users().getUser(userId);
+
+                //SD-518 - This bug meant it was impossible to edit machine-realm users in User Manager
+                //this defaults to the default realm only so just doesn't work for any user in the "machine" realm
+                //so as a quick fix, I'm changing it to iterate through all known realms if the original lookup fails
+                if (user == null) {
+                    LOG.trace("Failed to find user " + userId + " in default realm so checking other realms");
+                    List<RealmRepresentation> realms = keycloakClient.realms().getRealms();
+                    for (RealmRepresentation realm : realms) {
+                        String realmStr = realm.getRealm();
+                        LOG.trace("Checking realm [" + realmStr + "]");
+                        user = keycloakClient.realms().users().getUser(realmStr, userId);
+                        if (user != null) {
+                            LOG.trace("Found user " + userId + " in realm " + realmStr);
+                            break;
+                        }
+                    }
+                }
 
                 if (user != null) {
                     userMap.put(user.getId(), user);
@@ -171,6 +191,12 @@ public class UserCache {
 
         return accessToApp;
     }
+
+    public static UserApplicationProjectEntity getUserProjectApplicationInfo(String userId, String appName) throws Exception {
+        return userProjectRepository.getUserProjectWithAppInfo(userId, appName);
+
+    }
+
 
     public static Boolean getUserProjectApplicationAttributeAccess(String userId, String projectId, String appName, String attributeName) throws Exception {
         String upa = userId + "|" + projectId + "|" + appName + "|" + attributeName;

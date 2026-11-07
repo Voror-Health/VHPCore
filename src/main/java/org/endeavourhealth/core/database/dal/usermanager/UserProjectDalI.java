@@ -1,6 +1,7 @@
 package org.endeavourhealth.core.database.dal.usermanager;
 
 import org.endeavourhealth.core.database.dal.usermanager.models.JsonApplicationPolicyAttribute;
+import org.endeavourhealth.core.database.rdbms.usermanager.models.UserApplicationProjectEntity;
 import org.endeavourhealth.core.database.rdbms.usermanager.models.UserProjectEntity;
 
 import java.util.List;
@@ -25,6 +26,7 @@ public interface UserProjectDalI {
     public UserProjectEntity getUserProject(String userProjectId) throws Exception;
     public List<UserProjectEntity> getUserProjectEntities(String userId) throws Exception;
     public List<UserProjectEntity> getUserProjectsForUser(String userId) throws Exception;
+    public UserApplicationProjectEntity getUserProjectWithAppInfo(String userId, String appName) throws Exception;
     public List<JsonApplicationPolicyAttribute> getUserProjectsMergedAttributes(String userId, String projectId) throws Exception;
 
 }

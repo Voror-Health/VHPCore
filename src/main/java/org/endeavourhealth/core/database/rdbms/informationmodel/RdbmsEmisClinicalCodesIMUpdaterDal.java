@@ -45,10 +45,11 @@ public class RdbmsEmisClinicalCodesIMUpdaterDal implements EmisClinicalCodesIMUp
                 boolean isEmisCode = code.getIsEmisCode();
                 Timestamp dateLastUpdated = code.getDateLastUpdated();
 
+                //SD-856 - remove replacement chars � from source
                 sql = "INSERT INTO `" + tempTableName + "`"
                         + " SELECT "
-                        + "'" + readTerm.replaceAll("'","''") + "', "
-                        + "'" + readCode.replaceAll("'","''") + "', "
+                        + "'" + readTerm.replaceAll("'","''").replace("\\xFFFD", "").replace("�", "") + "', "
+                        + "'" + readCode.replaceAll("'","''").replace("\\xFFFD", "").replace("�", "") + "', "
                         + snomedConceptId + ","
                         + isEmisCode + ","
                         + "'" + dateLastUpdated + "'";

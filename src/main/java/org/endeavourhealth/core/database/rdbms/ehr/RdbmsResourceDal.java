@@ -17,12 +17,10 @@ import org.hl7.fhir.instance.model.ResourceType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.Types;
+import java.sql.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.Date;
 
 public class RdbmsResourceDal implements ResourceDalI {
     private static final Logger LOG = LoggerFactory.getLogger(RdbmsResourceDal.class);
@@ -332,8 +330,43 @@ public class RdbmsResourceDal implements ResourceDalI {
     }
 
     private static String getResourceCurrentSelectPrefix() {
-        return "SELECT service_id, system_id, resource_type, resource_id, updated_at, patient_id, resource_data, resource_checksum"
-                + " FROM resource_current";
+        return getResourceCurrentSelectPrefix(null);
+    }
+
+    private static String getResourceCurrentSelectPrefix(String tableAlias) {
+
+        String pre;
+        String post;
+        if (Strings.isNullOrEmpty(tableAlias)) {
+            pre = "";
+            post = "";
+        } else {
+            pre = tableAlias + ".";
+            post = " " + tableAlias;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("SELECT ");
+        sb.append(pre);
+        sb.append("service_id, ");
+        sb.append(pre);
+        sb.append("system_id, ");
+        sb.append(pre);
+        sb.append("resource_type, ");
+        sb.append(pre);
+        sb.append("resource_id, ");
+        sb.append(pre);
+        sb.append("updated_at, ");
+        sb.append(pre);
+        sb.append("patient_id, ");
+        sb.append(pre);
+        sb.append("resource_data, ");
+        sb.append(pre);
+        sb.append("resource_checksum ");
+        sb.append("FROM resource_current");
+        sb.append(post);
+
+        return sb.toString();
     }
 
     @Override
@@ -422,6 +455,36 @@ public class RdbmsResourceDal implements ResourceDalI {
         }
 
         return ret;
+    }
+
+    @Override
+    public List<ResourceWrapper> getAllAdminResourcesByType(String service_id, ResourceType resourceType, boolean returnDeletedResourceCurrent) throws Exception {
+        return getAllAdminResourcesByTypeImpl(service_id, resourceType, returnDeletedResourceCurrent);
+    }
+    private List<ResourceWrapper> getAllAdminResourcesByTypeImpl(String service_id, ResourceType resourceType, boolean returnDeletedResourceCurrent) throws Exception {
+        Connection connection = ConnectionManager.getEhrConnection(UUID.fromString(service_id));
+        String resource_type = resourceType.toString();
+        String sql = getResourceCurrentSelectPrefix()
+                + " WHERE service_id = ?"
+                + " AND patient_id = ''"
+                + " AND resource_type = ?;";
+
+        PreparedStatement ps = null;
+        try {
+            ps = connection.prepareStatement(sql);
+            int col = 1;
+            ps.setString(col++, service_id);
+            ps.setString(col++, resource_type);
+
+            ResultSet result = ps.executeQuery();
+            return readResourceWrappersFromResourceCurrentResultSet(result, returnDeletedResourceCurrent);
+        } finally {
+            if(ps != null){
+                ps.close();
+            }
+            connection.close();
+        }
+
     }
 
     private static void adjustHistoryForChangeover(List<ResourceWrapper> history, int indexFrom, ResourceWrapper current) {
@@ -982,44 +1045,63 @@ public class RdbmsResourceDal implements ResourceDalI {
     @Override
     public AdminResourceRetrieverI startRetrievingAdminResources(UUID serviceId, int batchSize) throws Exception {
 
-        Connection connection = ConnectionManager.getEhrNonPooledConnection(serviceId); //don't want a pooled conncetion
+        return new AdminResourceRetrieverImpl(serviceId, batchSize);
 
-        String sql = getResourceCurrentSelectPrefix()
-                + " WHERE service_id = ?"
-                + " AND patient_id = ''";
-        PreparedStatement ps = connection.prepareStatement(sql);
-
-        int col = 1;
-        ps.setString(col++, serviceId.toString());
-        ps.setFetchSize(batchSize);
-
-        ResultSet rs = ps.executeQuery();
-        return new AdminResourceRetrieverImpl(connection, rs, ps);
     }
 
 
     static class AdminResourceRetrieverImpl implements AdminResourceRetrieverI {
 
-        private Connection connection;
-        private ResultSet rs;
-        private PreparedStatement ps;
+        private UUID serviceId;
+        private int batchSize;
+        private String tempTable;
+        private Integer maxRows;
+        private int nextBatch = 0;
+        private boolean finished = false;
 
-        public AdminResourceRetrieverImpl(Connection connection, ResultSet rs, PreparedStatement ps) {
-            this.connection = connection;
-            this.rs = rs;
-            this.ps = ps;
+        public AdminResourceRetrieverImpl(UUID serviceId, int batchSize) throws Exception {
+            this.serviceId = serviceId;
+            this.batchSize = batchSize;
+            this.tempTable = ConnectionManager.generateTempTableName("Admin_Resources");
+            createTable();
         }
 
         @Override
         public List<ResourceWrapper> getNextBatch() throws Exception {
 
-            //if our previous batch was the last, this will be null
-            if (connection == null) {
+            //if we've already finished everything, there is no next batch
+            if (finished) {
                 return null;
             }
 
-            int batchSize = ps.getFetchSize();
-            List<ResourceWrapper> resourceWrappers = readResourceWrappersFromResourceCurrentResultSet(rs, false, batchSize);
+            int minRow = nextBatch * batchSize;
+            int maxRow = minRow + batchSize;
+            //LOG.debug("Retrieving admin batch " + nextBatch + " resource from " + minRow + " to " + maxRow + " / " + maxRows);
+            nextBatch ++;
+
+            List<ResourceWrapper> resourceWrappers = null;
+
+            Connection connection = ConnectionManager.getEhrNonPooledConnection(serviceId); //don't want a pooled connection
+            Statement statement = connection.createStatement(); //all SQL will be unique, so don't bother with prepared ones
+
+            try {
+                String sql = getResourceCurrentSelectPrefix("r")
+                        + " INNER JOIN " + tempTable + " t"
+                        + " ON"
+                        + " t.resource_id = r.resource_id"
+                        + " AND t.resource_type = r.resource_type"
+                        + " WHERE t.row_num > " + minRow
+                        + " AND t.row_num <= " + maxRow
+                        + " AND r.service_id = '" + serviceId.toString() + "'"
+                        + " AND r.patient_id = ''";
+
+                ResultSet rs = statement.executeQuery(sql);
+                resourceWrappers = readResourceWrappersFromResourceCurrentResultSet(rs, false, batchSize);
+
+            } finally {
+                statement.close();
+                connection.close();
+            }
 
             //if we've reached the end, close everything down
             if (resourceWrappers.size() < batchSize) {
@@ -1031,12 +1113,52 @@ public class RdbmsResourceDal implements ResourceDalI {
 
         @Override
         public void close() throws Exception {
-            if (connection != null) {
-                rs.close();
-                ps.close();
-                connection.close();
+            Connection connection = ConnectionManager.getEhrNonPooledConnection(serviceId); //don't want a pooled connection
+            Statement statement = connection.createStatement(); //all SQL will be unique, so don't bother with prepared ones
+            LOG.debug("Dropping table " + tempTable);
+            try {
+                String sql = "DROP TABLE " + tempTable;
+                statement.executeUpdate(sql);
 
-                connection = null; //just set to null so nothing goes wrong if we try to close twice
+            } finally {
+                statement.close();
+                connection.close();
+            }
+
+            finished = true;
+        }
+
+        private void createTable() throws Exception {
+            Connection connection = ConnectionManager.getEhrNonPooledConnection(serviceId); //don't want a pooled connection
+            Statement statement = connection.createStatement(); //all SQL will be unique, so don't bother with prepared ones
+
+            try {
+                String sql = "set @row = 0";
+                statement.executeUpdate(sql);
+
+                sql = "CREATE TABLE " + tempTable + " AS"
+                        + " SELECT resource_type, resource_id, @row:=@row+1 as `row_num`"
+                        + " FROM resource_current"
+                        + " WHERE service_id = '" + serviceId.toString() + "'"
+                        + " AND patient_id = ''"
+                        + " AND resource_type != '" + ResourceType.Slot.toString() + "'" //we never need Slot resources when doing this
+                        + " AND resource_data != ''";   //exclude deleted resources (DDSEUS-262)
+                statement.executeUpdate(sql);
+
+                sql = "CREATE INDEX ix ON " + tempTable + " (row_num)";
+                statement.executeUpdate(sql);
+
+                sql = "SELECT MAX(row_num) FROM " + tempTable;
+                ResultSet rs = statement.executeQuery(sql);
+                if (rs.next()) {
+                    maxRows = new Integer(rs.getInt(1));
+                } else {
+                    maxRows = new Integer(0);
+                }
+
+            } finally {
+                statement.close();
+                connection.close();
             }
         }
     }

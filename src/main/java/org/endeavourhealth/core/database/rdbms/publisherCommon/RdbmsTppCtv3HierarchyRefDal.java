@@ -94,8 +94,8 @@ public class RdbmsTppCtv3HierarchyRefDal implements TppCtv3HierarchyRefDalI {
             String sql = "CREATE TABLE " + tempTableName + " ("
                     + "RowIdentifier int, "
                     + "IDOrganisationVisibleTo varchar(255), "
-                    + "Ctv3CodeParent varchar(255) binary, "
-                    + "Ctv3CodeChild varchar(255) binary, "
+                    + "Ctv3CodeParent varchar(5) binary, "
+                    + "Ctv3CodeChild varchar(5) binary, "
                     + "ChildLevel int, "
                     + "RemovedData int, "
                     + "key_exists boolean DEFAULT FALSE, "
@@ -127,7 +127,7 @@ public class RdbmsTppCtv3HierarchyRefDal implements TppCtv3HierarchyRefDalI {
             statement.executeUpdate(sql);
             statement.close();
 
-            //insert records into the target table where the staging
+            //insert new records into the target table
             //LOG.debug("Copying into target table tpp_ctv3_hierarchy_ref_2");
             sql = "INSERT IGNORE INTO tpp_ctv3_hierarchy_ref_2 (parent_code, child_code, child_level, dt_last_updated)"
                     + " SELECT Ctv3CodeParent, Ctv3CodeChild, ChildLevel, " + ConnectionManager.formatDateString(dataDate, true)
@@ -137,8 +137,16 @@ public class RdbmsTppCtv3HierarchyRefDal implements TppCtv3HierarchyRefDalI {
             statement.executeUpdate(sql);
             statement.close();
 
-            //unlike similar bulk load routines, there's no UPDATE statement
-            //because this file has no unique ID we can use for updates
+            //update any existing ones with the latest date to ensure single publisher run (SD-781)
+            sql = "UPDATE tpp_ctv3_hierarchy_ref_2 t"
+                    + " INNER JOIN " + tempTableName + " s"
+                    + " ON t.child_code = s.Ctv3CodeChild"
+                    + " AND t.parent_code = s.Ctv3CodeParent"
+                    + " SET t.dt_last_updated = " + ConnectionManager.formatDateString(dataDate, true)
+                    + " WHERE s.key_exists = true";
+            statement = connection.createStatement(); //one-off SQL due to table name, so don't use prepared statement
+            statement.executeUpdate(sql);
+            statement.close();
 
             long msEnd = System.currentTimeMillis();
             LOG.debug("Update of tpp_ctv3_hierarchy_ref_2 Completed in " + ((msEnd-msStart)/1000) + "s");
@@ -154,66 +162,44 @@ public class RdbmsTppCtv3HierarchyRefDal implements TppCtv3HierarchyRefDalI {
         }
     }
 
-    /*@Override
-    public void save(TppCtv3HierarchyRef ref) throws Exception {
-        if (ref == null) {
-            throw new IllegalArgumentException("ref is null");
-        }
+    @Override
+    public Date getMostRecentCtv3HierarchyDate() throws Exception {
+        DeadlockHandler h = new DeadlockHandler();
+        h.setRetryDelaySeconds(30); //give it long enough for the other thing to finish
 
-        List<TppCtv3HierarchyRef> l = new ArrayList<>();
-        l.add(ref);
-        save(l);
+        while (true) {
+            try {
+                return getMostRecentCtv3HierarchyDateImpl();
+
+            } catch (Exception ex) {
+                h.handleError(ex);
+            }
+        }
     }
 
-    @Override
-    public void save(List<TppCtv3HierarchyRef> refs) throws Exception {
-        if (refs == null || refs.isEmpty()) {
-            throw new IllegalArgumentException("ref is null or empty");
-        }
 
-        EntityManager entityManager = ConnectionManager.getPublisherCommonEntityManager();
+    public Date getMostRecentCtv3HierarchyDateImpl() throws Exception {
+        Connection connection = ConnectionManager.getPublisherCommonConnection();
         PreparedStatement ps = null;
         try {
-            SessionImpl session = (SessionImpl) entityManager.getDelegate();
-            Connection connection = session.connection();
-
-            String sql = "INSERT INTO tpp_ctv3_hierarchy_ref "
-                    + " (row_id, ctv3_parent_read_code, ctv3_child_read_code, child_level)"
-                    + " VALUES (?, ?, ?, ?)"
-                    + " ON DUPLICATE KEY UPDATE"
-                    + " ctv3_parent_read_code = VALUES(ctv3_parent_read_code),"
-                    + " ctv3_child_read_code = VALUES(ctv3_child_read_code),"
-                    + " child_level = VALUES(child_level)";
+            String sql = "SELECT MAX(dt_last_updated)"
+                    + " FROM tpp_ctv3_hierarchy_ref_2";
 
             ps = connection.prepareStatement(sql);
+            //ps.executeQuery();
+            ResultSet rs = ps.executeQuery();
+            if (rs.next() && rs.getTimestamp(1) != null) {
+                return new java.util.Date(rs.getTimestamp(1).getTime());
 
-            entityManager.getTransaction().begin();
-
-            for (TppCtv3HierarchyRef ref : refs) {
-
-                int col = 1;
-
-                ps.setLong(col++, ref.getRowId());
-                ps.setString(col++, ref.getCtv3ParentReadCode());
-                ps.setString(col++, ref.getCtv3ChildReadCode());
-                ps.setInt(col++, ref.getChildLevel());
-
-                ps.addBatch();
+            } else {
+                return null;
             }
-
-            ps.executeBatch();
-
-            entityManager.getTransaction().commit();
-
-        } catch (Exception ex) {
-            entityManager.getTransaction().rollback();
-            throw ex;
 
         } finally {
             if (ps != null) {
                 ps.close();
             }
-            entityManager.close();
+            connection.close();
         }
-    }*/
+    }
 }

@@ -11,7 +11,7 @@ import org.endeavourhealth.core.database.dal.usermanager.caching.ApplicationPoli
 import org.endeavourhealth.core.database.dal.usermanager.caching.OrganisationCache;
 import org.endeavourhealth.core.database.dal.usermanager.caching.ProjectCache;
 import org.endeavourhealth.core.database.dal.usermanager.caching.UserCache;
-import org.endeavourhealth.core.database.rdbms.usermanager.models.UserProjectEntity;
+import org.endeavourhealth.core.database.rdbms.usermanager.models.*;
 import org.endeavourhealth.core.database.dal.usermanager.models.JsonApplicationPolicyAttribute;
 import org.keycloak.representations.idm.UserRepresentation;
 
@@ -41,8 +41,8 @@ public class RdbmsCoreUserProjectDal implements UserProjectDalI {
     }
 
     public Boolean checkUserProjectApplicationAttributeAccess(String userId,
-                                                     String projectId,
-                                                     String applicationName, String attributeName) throws Exception {
+                                                              String projectId,
+                                                              String applicationName, String attributeName) throws Exception {
 
         List<JsonApplicationPolicyAttribute> mergedAttributes = getMergedAttributes(userId, projectId);
 
@@ -159,6 +159,124 @@ public class RdbmsCoreUserProjectDal implements UserProjectDalI {
             List<UserProjectEntity> results = query.getResultList();
 
             return results;
+        } finally {
+            entityManager.close();
+        }
+
+    }
+
+    public UserApplicationProjectEntity getUserProjectWithAppInfo(String userId, String appName) throws Exception {
+        EntityManager entityManager = ConnectionManager.getUmEntityManager();
+
+        try {
+            boolean hasAccessToApplication = false;
+            String applicationProfileId = "";
+            String applicationPolicyId = "";
+            String applicationId = "";
+
+            UserApplicationProjectEntity retVal = new UserApplicationProjectEntity();
+            retVal.setAppName(appName);
+            retVal.setUserId(userId);
+
+
+            String sql = "Select uap from UserApplicationPolicyEntity uap where " +
+                    "uap.userId = :userId";
+            Query query0 = entityManager.createQuery(sql);
+            query0.setParameter("userId", userId);
+            List<UserApplicationPolicyEntity> res0 =
+                    query0.getResultList();
+            if (res0.size() > 0) {
+                applicationPolicyId = res0.get(0).getApplicationPolicyId();
+
+            } else
+                throw new NullPointerException("no entries with given userId: \"" + userId + "\" from the user application policy entity");
+
+            sql = "select application from ApplicationEntity application where " +
+                    "application.name = :name and isDeleted = 0";
+            Query query1 = entityManager.createQuery(sql);
+            String param = "name";
+            query1.setParameter(param, appName);
+            List<ApplicationEntity> res1 = query1.getResultList();
+            if (res1.size() > 0) {
+                applicationId = res1.get(0).getId();
+                retVal.setAppId(applicationId);
+            } else
+                throw new NullPointerException("no entries with given application name \"" + appName + "\" from the Application entity");
+
+            sql = "select applicationAccessProfile from ApplicationAccessProfileEntity applicationAccessProfile " +
+                    "where applicationAccessProfile.applicationId = :appId and " +
+                    " name = :appName and " +
+                    "applicationAccessProfile.isDeleted = 0";
+            param = "appId";
+            Query query2 = entityManager.createQuery(sql);
+            query2.setParameter(param, applicationId);
+            param = "appName";
+            query2.setParameter(param, appName);
+            List<ApplicationAccessProfileEntity> res2 = query2.getResultList();
+            if (res2.size() > 0) {
+                applicationProfileId = res2.get(0).getId();
+            } else
+                throw new NullPointerException("no entries with given applicationId \"" + applicationId + "\" in the application access profile entity");
+
+
+            sql = "select apa from ApplicationPolicyAttributeEntity apa where " +
+                    "apa.applicationPolicyId = :applicationPolicyId " +
+                    "and applicationAccessProfileId = :appAccessProfileId " +
+                    "and isDeleted = 0";
+            Query query3 = entityManager.createQuery(sql);
+            param = "applicationPolicyId";
+            query3.setParameter(param, applicationPolicyId);
+            param = "appAccessProfileId";
+            query3.setParameter(param, applicationProfileId);
+            List<ApplicationPolicyAttributeEntity> res3 = query3.getResultList();
+            if (res3.size() > 0) {
+                hasAccessToApplication = true;
+            } else
+                throw new NullPointerException("no entries found in the application polict attribute entity for application policy id \"" +
+                        applicationPolicyId + "\" and application access profile id \"" + applicationProfileId + "\" " +
+                        "you may not have authorisation");
+
+
+            if (hasAccessToApplication) {
+                sql = "select project from UserProjectEntity project where " +
+                        "project.userId = :userId and project.isDeleted = 0 " +
+                        "and project.isDefault = 1";
+                Query query4 = entityManager.createQuery(sql);
+                param = "userId";
+                query4.setParameter(param, userId);
+                List<UserProjectEntity> res4 = query4.getResultList();
+                if (res4.size() > 0) {
+                    retVal.setProjectId(res4.get(0).getProjectId());
+                    retVal.setUserProjectId(res4.get(0).getId());
+                    retVal.setOrganisationId(res4.get(0).getId());
+                    retVal.setIsDefault(res4.get(0).getIsDefault());
+                    byte isDel = 0;
+                    retVal.setIsDeleted(isDel);
+                } else throw new NullPointerException("no projects found for user id \"" + userId + "\"");
+
+            }
+//
+//            sql = "SELECT ApplicationEntity.id, ApplicationEntity.name, " +
+//                    "UserProjectEntity.id, UserProjectEntity.userId, " +
+//                    "UserProjectEntity.projectId, " +
+//                    "UserProjectEntity.organisationId, " +
+//                    "UserProjectEntity.isDeleted, UserProjectEntity.isDefault " +
+//                    "from UserApplicationPolicyEntity uap " +
+//
+//                    "inner join ApplicationPolicyAttributeEntity apa on apa.applicationPolicyId = " +
+//                    "uap.applicationPolicyId and apa.isDeleted = 0 " +
+//                    "inner join ApplicationAccessProfileEntity aap on aap.id = apa.applicationAccessProfileId " +
+//                    "inner join ApplicationEntity ae on ae.id = aap.applicationId " +
+//                    "inner join UserProjectEntity up on up.userId = uap.userId " +
+//                    "where uap.userId = :userId and up.isDeleted = 0";
+//
+//            Query query = entityManager.createQuery(sql);
+//
+//            query.setParameter("userId", userId);
+//
+//            List<UserApplicationProjectEntity> results = query.getResultList();
+
+            return retVal;
         } finally {
             entityManager.close();
         }
@@ -285,7 +403,7 @@ public class RdbmsCoreUserProjectDal implements UserProjectDalI {
         ObjectMapper mapper = new ObjectMapper();
         JsonNode rootNode = mapper.createObjectNode();
 
-        ((ObjectNode)rootNode).put("title", "Default project changed");
+        ((ObjectNode) rootNode).put("title", "Default project changed");
 
         if (afterJson != null) {
             ((ObjectNode) rootNode).set("after", afterJson);
@@ -306,10 +424,10 @@ public class RdbmsCoreUserProjectDal implements UserProjectDalI {
         ObjectMapper mapper = new ObjectMapper();
         JsonNode auditJson = mapper.createObjectNode();
 
-        ((ObjectNode)auditJson).put("id", userProject.getId());
-        ((ObjectNode)auditJson).put("user", user.getUsername());
-        ((ObjectNode)auditJson).put("project", projectEntity.getName());
-        ((ObjectNode)auditJson).put("organisation", organisation.getName() + " (" + organisation.getOdsCode() + ")");
+        ((ObjectNode) auditJson).put("id", userProject.getId());
+        ((ObjectNode) auditJson).put("user", user.getUsername());
+        ((ObjectNode) auditJson).put("project", projectEntity.getName());
+        ((ObjectNode) auditJson).put("organisation", organisation.getName() + " (" + organisation.getOdsCode() + ")");
 
         return auditJson;
     }
@@ -320,7 +438,7 @@ public class RdbmsCoreUserProjectDal implements UserProjectDalI {
             Object json = mapper.readValue(jsonNode.toString(), Object.class);
             return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(json);
         } catch (Exception e) {
-            throw new Exception("Converting Json to String failed : " + e.getMessage() );
+            throw new Exception("Converting Json to String failed : " + e.getMessage());
         }
     }
 

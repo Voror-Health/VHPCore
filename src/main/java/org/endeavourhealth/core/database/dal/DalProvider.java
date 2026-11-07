@@ -554,6 +554,10 @@ public class DalProvider {
         return new RdbmsStagingDIAGNDal();
     }
 
+    public static StagingDIAGNDalI factoryNwlExtractsStagingDIAGNDalI() {
+        return new RdbmsStagingDIAGNDal();
+    }
+
     public static StagingProblemDalI factoryBartsStagingProblemDalI() {
         return new RdbmsStagingProblemDal();
     }
@@ -563,6 +567,10 @@ public class DalProvider {
     }
 
     public static StagingClinicalEventDalI factoryBartsStagingClinicalEventDalI() {
+        return new RdbmsStagingClinicalEventsDal();
+    }
+
+    public static StagingClinicalEventDalI factoryNwlExtractsStagingClinicalEventDalI() {
         return new RdbmsStagingClinicalEventsDal();
     }
 

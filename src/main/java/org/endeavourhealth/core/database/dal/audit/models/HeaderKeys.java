@@ -45,5 +45,6 @@ public abstract class HeaderKeys {
     public static final String AllowQueueing = "AllowQueueing";
     public static final String LastMessageForExchange = "LastMessageForExchange";
     public static final String ProtocolAction = "ProtocolAction";
+    public static final String RoutingOverride = "RoutingOverride";
 }
 

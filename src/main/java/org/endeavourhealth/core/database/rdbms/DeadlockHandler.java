@@ -19,14 +19,15 @@ public class DeadlockHandler {
     private int maxAttempts;
     private int attempts;
     private List<Pattern> errorMessages = new ArrayList<>();
-    private int retryDelaySeconds;
+    private Integer retryDelaySeconds;
+    private Integer retryDelayMillis;
     private boolean delayBackOff = false; //whether to increase the delay between attempts as the number of attempts goes up
     private Set<String> matchedMessages = new HashSet<>();
 
     public DeadlockHandler() {
         this.attempts = 0;
         this.maxAttempts = 5; //allow five attempts by default
-        this.retryDelaySeconds = 1; //default to 1s between attempts
+        this.retryDelaySeconds = new Integer(1); //default to 1s between attempts
         addErrorMessageToHandler(DEADLOCK_ERR);
         addErrorMessageToHandler(LOCK_ERR);
     }
@@ -36,41 +37,44 @@ public class DeadlockHandler {
         this.errorMessages.add(p);
     }
 
-    public int getRetryDelaySeconds() {
-        return retryDelaySeconds;
-    }
-
     public void setRetryDelaySeconds(int retryDelaySeconds) {
-        this.retryDelaySeconds = retryDelaySeconds;
+        this.retryDelaySeconds = new Integer(retryDelaySeconds);
+        this.retryDelayMillis = null; //null the other field
     }
 
-    public int getMaxAttempts() {
-        return maxAttempts;
+    public void setRetryDelayMillis(int retryDelayMillis) {
+        this.retryDelayMillis = new Integer(retryDelayMillis);
+        this.retryDelaySeconds = null; //null the other field
     }
 
     public void setMaxAttempts(int maxAttempts) {
         this.maxAttempts = maxAttempts;
     }
 
-    public boolean isDelayBackOff() {
-        return delayBackOff;
-    }
-
     public void setDelayBackOff(boolean delayBackOff) {
         this.delayBackOff = delayBackOff;
     }
 
-    private int getNextDelaySeconds() {
+    private long getNextDelayMillis() {
 
-        if (delayBackOff) {
-            //if backing off over time, generate the delay from the fibonacci sequence which seems to give
-            //a fairly good distribution over time and times by the delay period
-            return getFibonacciValue(this.attempts+1) * retryDelaySeconds;
-
-        } else {
-            //if not doing the back off thing, then always use the same delay period
-            return retryDelaySeconds;
+        //if delaying by MS, then it doesn't support the backoff mechanism, so just return the absolute delay
+        if (retryDelayMillis != null) {
+            return retryDelayMillis;
         }
+
+        if (retryDelaySeconds != null) {
+            if (delayBackOff) {
+                //if backing off over time, generate the delay from the fibonacci sequence which seems to give
+                //a fairly good distribution over time and times by the delay period
+                return (long)getFibonacciValue(this.attempts + 1) * (long)retryDelaySeconds * 1000L;
+
+            } else {
+                //if not doing the back off thing, then always use the same delay period
+                return (long)retryDelaySeconds * 1000L;
+            }
+        }
+
+        throw new RuntimeException("No delay period set");
     }
 
     private int getFibonacciValue(int i) {
@@ -126,11 +130,11 @@ public class DeadlockHandler {
         this.matchedMessages.add(matchingMessage);
 
         //if it's a matching error, decrease our lives and let it try again
-        int delaySec = getNextDelaySeconds();
-        LOG.error("Error [" + exc.getMessage() + "] when writing to DB - will try again in " + delaySec + "s (" + (maxAttempts-attempts) + " remaining)");
+        long delayMs = getNextDelayMillis();
+        LOG.error("Error [" + exc.getMessage() + "] when writing to DB - will try again in " + delayMs + "ms (" + (maxAttempts-attempts) + " remaining)");
         attempts++;
         try {
-            Thread.sleep((long)delaySec * 1000L);
+            Thread.sleep(delayMs);
         } catch (InterruptedException ie) {
             //we should never be interrupted so throw if we get it
             throw new RuntimeException("", ie);

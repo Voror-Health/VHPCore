@@ -1,17 +1,19 @@
 package org.endeavourhealth.core.database.rdbms.publisherTransform;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.google.common.base.Strings;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
 import org.apache.commons.csv.QuoteMode;
-import org.apache.commons.io.FilenameUtils;
 import org.endeavourhealth.common.config.ConfigManager;
 import org.endeavourhealth.common.utility.FileHelper;
+import org.endeavourhealth.core.database.dal.DalProvider;
 import org.endeavourhealth.core.database.dal.audit.models.PublishedFile;
 import org.endeavourhealth.core.database.dal.audit.models.PublishedFileColumn;
 import org.endeavourhealth.core.database.dal.audit.models.PublishedFileRecord;
 import org.endeavourhealth.core.database.dal.audit.models.PublishedFileType;
+import org.endeavourhealth.core.database.dal.ehr.ResourceDalI;
 import org.endeavourhealth.core.database.dal.ehr.models.ResourceWrapper;
 import org.endeavourhealth.core.database.dal.publisherTransform.SourceFileMappingDalI;
 import org.endeavourhealth.core.database.dal.publisherTransform.models.ResourceFieldMapping;
@@ -25,25 +27,30 @@ import org.slf4j.LoggerFactory;
 
 import javax.persistence.EntityManager;
 import javax.persistence.Query;
+import java.io.InputStreamReader;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.util.*;
 
 public class RdbmsSourceFileMappingDal implements SourceFileMappingDalI {
     private static final Logger LOG = LoggerFactory.getLogger(RdbmsSourceFileMappingDal.class);
 
-    //private static final String CSV_DELIM = "|";
-
-    private final Random random = new Random(System.currentTimeMillis());
+    /*private final Random random = new Random(System.currentTimeMillis());
     private static Integer cachedPercentageToSendToFhirAudit = null;
-    private static long cachedPercentageExpiry = -1;
+    private static long cachedPercentageExpiry = -1;*/
 
+    private static String cachedFileStoragePath = null;
+    private static Map<UUID, Boolean> hmDatabasesWithNewAuditTable = new HashMap<>();
 
+    @Override
     public List<ResourceFieldMapping> findFieldMappings(UUID serviceId, ResourceType resourceType, UUID resourceId) throws Exception {
         return findFieldMappingsForField(serviceId, resourceType, resourceId, null);
     }
 
+    @Override
     public List<ResourceFieldMapping> findFieldMappingsForField(UUID serviceId, ResourceType resourceType, UUID resourceId, String specificField) throws Exception {
 
         //retrieve the resource mappings audit objects
@@ -56,21 +63,27 @@ public class RdbmsSourceFileMappingDal implements SourceFileMappingDalI {
         Map<Integer, PublishedFile> hmPublishedFiles = findPublishedFiles(publishedRecords);
         Map<Integer, PublishedFileType> hmPublishedFileTypes = findPublishedFileTypes(hmPublishedFiles);
 
-        //if we've got any content pointing to old-style audits, in the publisher transform DB, retrieve them
-        /*Map<Long, RdbmsSourceFileRecord> hmOldStyleRecords = null;
-        Map<Integer, String> hmOldStyleSourceFileNames = null;
-
-        if (!oldStyleRecordIds.isEmpty()) {
-            hmOldStyleRecords = findOldStyleSourceFileRecords(serviceId, oldStyleRecordIds);
-            hmOldStyleSourceFileNames = findOldStyleSourceFileNames(serviceId, hmOldStyleRecords);
-        }*/
-
         List<ResourceFieldMapping> ret = createFileMappingObjects(resourceAudits, publishedRecords, hmPublishedFiles, hmPublishedFileTypes, specificField);
 
         //the above fn doesn't ahve the resource ID or type in scope so we them on the objects now
         for (ResourceFieldMapping obj: ret) {
             obj.setResourceId(resourceId);
             obj.setResourceType(resourceType.toString());
+        }
+
+        return ret;
+    }
+
+    @Override
+    public Map<UUID, ResourceFieldMappingAudit> findAllMappingsForResource(UUID serviceId, ResourceType resourceType, UUID resourceId) throws Exception {
+
+        Map<UUID, ResourceFieldMappingAudit> ret = new HashMap<>();
+
+        List<AuditWrapper> auditWrappers = findResourceMappings(serviceId, resourceType, resourceId);
+        for (AuditWrapper w: auditWrappers) {
+            UUID versionId = w.getVersion();
+            ResourceFieldMappingAudit audit = w.getAudit();
+            ret.put(versionId, audit);
         }
 
         return ret;
@@ -181,8 +194,6 @@ public class RdbmsSourceFileMappingDal implements SourceFileMappingDalI {
                                                                 List<PublishedFileRecord> publishedRecords,
                                                                 Map<Integer, PublishedFile> hmPublishedFiles,
                                                                 Map<Integer, PublishedFileType> hmPublishedFileTypes,
-                                                                //Map<Long, RdbmsSourceFileRecord> hmOldStyleRecords,
-                                                                //Map<Integer, String> hmOldStyleSourceFileNames,
                                                                 String specificField) throws Exception {
 
         List<ResourceFieldMapping> ret = new ArrayList<>();
@@ -270,7 +281,7 @@ public class RdbmsSourceFileMappingDal implements SourceFileMappingDalI {
             value = line.substring(colStart, colEnd);
 
         } else {
-            //if not fixed-wdith, then parse using a CSV parser
+            //if not fixed-width, then parse using a CSV parser
             //compose a suitable CSV format from what we know of the type
             CSVFormat csvFormat = CSVFormat.DEFAULT
                     .withDelimiter(fileType.getVariableColumnDelimiter())
@@ -410,59 +421,9 @@ public class RdbmsSourceFileMappingDal implements SourceFileMappingDalI {
     }
 
 
-    /*private Map<Integer, String> findOldStyleSourceFileNames(UUID serviceId, Map<Long, RdbmsSourceFileRecord> oldStyleFileRecordsMap) throws Exception {
-
-        //find distinct file IDs from the records
-        Set<Integer> fileIds = new HashSet<>();
-
-        for (Long recordId: oldStyleFileRecordsMap.keySet()) {
-            RdbmsSourceFileRecord oldStyleRecord = oldStyleFileRecordsMap.get(recordId);
-            int fileId = oldStyleRecord.getSourceFileId();
-            fileIds.add(new Integer(fileId));
-        }
-        List<Integer> distinctFileIds = new ArrayList<>(fileIds);
-
-        EntityManager entityManager = ConnectionManager.getPublisherTransformEntityManager(serviceId);
-        try {
-            String sql = "select c"
-                    + " from"
-                    + " RdbmsSourceFile c"
-                    + " where c.id IN :id_list";
-
-            Map<Integer, String> ret = new HashMap<>();
-
-            Query query = entityManager.createQuery(sql, RdbmsSourceFile.class)
-                    .setParameter("id_list", distinctFileIds);
-
-            List<RdbmsSourceFile> results = query.getResultList();
-            for (RdbmsSourceFile result: results) {
-                ret.put(result.getId(), result.getFilePath());
-            }
-
-            return ret;
-        } finally {
-            entityManager.close();
-        }
-    }*/
-
-
-    private static String createAuditDir(String topLevelPath, UUID serviceId, String resourceType, UUID resourceId) {
-        String ret = FilenameUtils.concat(topLevelPath, serviceId.toString());
-        ret = FilenameUtils.concat(ret, resourceType);
-        ret = FilenameUtils.concat(ret, resourceId.toString());
-        return ret;
-    }
-
     private List<AuditWrapper> findResourceMappings(UUID serviceId, ResourceType resourceType, UUID resourceId) throws Exception {
 
         List<AuditWrapper> ret = new ArrayList<>();
-
-        //the audit history of a resource may be in the audit storage path or in the DB, depending on the configuration state,
-        //so we need to look in both places (for the time being)
-        /*String topLevelStoragePath = getAuditStoragePath();
-        if (!Strings.isNullOrEmpty(topLevelStoragePath)) {
-            findResourceMappingsFromDisk(ret, topLevelStoragePath, serviceId, resourceType, resourceId);
-        }*/
 
         //look in the global FHIR audit DB
         try {
@@ -485,10 +446,138 @@ public class RdbmsSourceFileMappingDal implements SourceFileMappingDalI {
             entityManager.close();
         }
 
+        //look in the new-style short-term staging table if present
+        if (hasNewTable(serviceId)) {
+            findResourceMappingsFromNewTable(ret, serviceId, resourceType, resourceId);
+        }
+
+        //look in the new-style long-term S3 file store
+        findResourceMappingsFromFileStore(ret, serviceId, resourceType, resourceId);
+
         //we always need the mappings in date order, since we only need to retrieve the most recent audit for each JSON field in the resource
         ret.sort((a, b) -> a.getCreated().compareTo(b.getCreated()));
 
         return ret;
+    }
+
+    @Override
+    public String getPermanentStoragePath() throws Exception {
+        //see if we're configured to use an S3 archive
+        if (cachedFileStoragePath == null) {
+            JsonNode json = ConfigManager.getConfigurationAsJson("common_config", "queuereader");
+            if (json != null) {
+                JsonNode node = json.get("mapping_storage_path");
+                if (node != null) {
+                    cachedFileStoragePath = node.asText();
+                }
+            }
+        }
+        return cachedFileStoragePath;
+    }
+
+    /**
+     * finds any mappings that have been archived off to S3
+     */
+    private void findResourceMappingsFromFileStore(List<AuditWrapper> ret, UUID serviceId, ResourceType resourceType, UUID resourceId) throws Exception {
+
+        String storagePath = getPermanentStoragePath();
+        if (Strings.isNullOrEmpty(storagePath)) {
+            LOG.warn("No mapping_storage_path set in config for archived transform mappings");
+            return;
+        }
+
+        //the mappings are archived by service date and time (hour & minute), so we need
+        //to find all the distinct date times our resource was changed
+        DateFormat dateFormat = new SimpleDateFormat("yyyyMMdd");
+        DateFormat timeFormat = new SimpleDateFormat("HHmm");
+        Set<String> filePaths = new HashSet<>();
+
+        ResourceDalI resourceDal = DalProvider.factoryResourceDal();
+        List<ResourceWrapper> history = resourceDal.getResourceHistory(serviceId, resourceType.toString(), resourceId);
+        for (ResourceWrapper w: history) {
+            Date d = w.getCreatedAt();
+            String dateStr = dateFormat.format(d);
+            String timeStr = timeFormat.format(d);
+
+            String filePath = FileHelper.concatFilePath(storagePath, serviceId.toString(), dateStr, timeStr + ".csv");
+            filePaths.add(filePath);
+        }
+
+        DateFormat dateTimeFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+
+        for (String filePath: filePaths) {
+
+            if (!FileHelper.fileExists(filePath)) {
+                continue;
+            }
+
+            InputStreamReader isr = FileHelper.readFileReaderFromSharedStorage(filePath);
+            CSVParser parser = new CSVParser(isr, CSVFormat.DEFAULT.withHeader());
+            Iterator<CSVRecord> iterator = parser.iterator();
+
+            while (iterator.hasNext()) {
+                CSVRecord record = iterator.next();
+                UUID recordResourceId = UUID.fromString(record.get("resource_id"));
+                ResourceType recordResourceType = ResourceType.valueOf(record.get("resource_type"));
+
+                if (!recordResourceId.equals(resourceId)
+                        || recordResourceType != resourceType) {
+                    continue;
+                }
+
+                UUID recordVersion = UUID.fromString(record.get("version"));
+                Date recordDate = dateTimeFormat.parse(record.get("created_at"));
+                String mappingsJson = record.get("mappings_json");
+
+                ResourceFieldMappingAudit audit = ResourceFieldMappingAudit.readFromJson(mappingsJson);
+
+                AuditWrapper wrapper = new AuditWrapper(audit, recordVersion, recordDate);
+                ret.add(wrapper);
+            }
+        }
+    }
+
+    /**
+     * finds any mappings stored in the newer fhir_mapping_audit table (content in this table is archived off to S3 every day)
+     */
+    private void findResourceMappingsFromNewTable(List<AuditWrapper> ret, UUID serviceId, ResourceType resourceType, UUID resourceId) throws Exception {
+
+        Connection connection = ConnectionManager.getPublisherTransformConnection(serviceId);
+        PreparedStatement ps = null;
+        try {
+
+            String sql = "SELECT version, created_at, mappings_json"
+                    + " FROM fhir_mapping_audit"
+                    + " WHERE resource_id = ?"
+                    + " AND resource_type = ?";
+
+            ps = connection.prepareStatement(sql);
+
+            int col = 1;
+            ps.setString(col++, resourceId.toString());
+            ps.setString(col++, resourceType.toString());
+
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+
+                col = 1;
+
+                UUID version = UUID.fromString(rs.getString(col++));
+                java.util.Date createdAt = new java.util.Date(rs.getTimestamp(col++).getTime());
+                String mappingsJson = rs.getString(col++);
+                ResourceFieldMappingAudit audit = ResourceFieldMappingAudit.readFromJson(mappingsJson);
+
+                AuditWrapper wrapper = new AuditWrapper(audit, version, createdAt);
+                ret.add(wrapper);
+            }
+
+        } finally {
+            if (ps != null) {
+                ps.close();
+            }
+            connection.close();
+        }
+
     }
 
     private void findResourceMappingsFromDatabase(List<AuditWrapper> wrappers, EntityManager entityManager, UUID serviceId, ResourceType resourceType, UUID resourceId) throws Exception {
@@ -514,33 +603,6 @@ public class RdbmsSourceFileMappingDal implements SourceFileMappingDalI {
             wrappers.add(wrapper);
         }
     }
-
-
-    /*private Map<Long, RdbmsSourceFileRecord> findOldStyleSourceFileRecords(UUID serviceId, Set<Long> oldStyleRecordAuditIds) throws Exception {
-
-        EntityManager entityManager = ConnectionManager.getPublisherTransformEntityManager(serviceId);
-        try {
-            String sql = "select c"
-                    + " from"
-                    + " RdbmsSourceFileRecord c"
-                    + " where c.id IN :audit_ids";
-
-            Query query = entityManager.createQuery(sql, RdbmsSourceFileRecord.class)
-                    .setParameter("audit_ids", new ArrayList<>(oldStyleRecordAuditIds));
-
-            Map<Long, RdbmsSourceFileRecord> ret = new HashMap<>();
-
-            List<RdbmsSourceFileRecord> results = query.getResultList();
-            for (RdbmsSourceFileRecord result: results) {
-                ret.put(result.getId(), result);
-            }
-
-            return ret;
-
-        } finally {
-            entityManager.close();
-        }
-    }*/
 
 
     /**
@@ -637,29 +699,6 @@ public class RdbmsSourceFileMappingDal implements SourceFileMappingDalI {
                 return;
             }
 
-            //if the population of the above table hasn't completed yet, then check the old table
-            /*ps.close();
-
-            sql = "SELECT r.source_location, f.new_published_file_id"
-                    + " FROM source_file_record r"
-                    + " INNER JOIN source_file f"
-                    + " ON r.source_file_id = f.id"
-                    + " WHERE r.id = ?";
-            ps = connection.prepareStatement(sql);
-
-            ps.setLong(1, oldSourceRecordId.longValue());
-
-            rs = ps.executeQuery();
-            if (rs.next()) {
-                String locationStr = rs.getString(1);
-                int publishedFileId = rs.getInt(2);
-
-                row.setFileId(publishedFileId);
-                row.setRecord(Integer.parseInt(locationStr));
-                row.setOldStyleAuditId(null);
-                return;
-            }*/
-
             throw new Exception("Failed to find published file details for old-style audit ID " + oldSourceRecordId);
 
         } finally {
@@ -673,6 +712,123 @@ public class RdbmsSourceFileMappingDal implements SourceFileMappingDalI {
 
     @Override
     public void saveResourceMappings(Map<ResourceWrapper, ResourceFieldMappingAudit> audits) throws Exception {
+
+        if (audits == null || audits.isEmpty()) {
+            return;
+        }
+
+        //find service id and verify it's consistent
+        UUID serviceId = null;
+        for (ResourceWrapper wrapper : audits.keySet()) {
+            if (serviceId == null) {
+                serviceId = wrapper.getServiceId();
+            } else if (!serviceId.equals(wrapper.getServiceId())) {
+                throw new IllegalArgumentException("Can't save audits for multiple services at once");
+            }
+        }
+
+        if (hasNewTable(serviceId)) {
+            saveResourceMappingsNewWay(audits, serviceId);
+
+        } else {
+            saveResourceMappingsOldWay(audits, serviceId);
+        }
+
+    }
+
+    /**
+     * saves the FHIR resource mappings to the older resource_field_mappings table
+     */
+    private void saveResourceMappingsOldWay(Map<ResourceWrapper, ResourceFieldMappingAudit> audits, UUID serviceId) throws Exception {
+
+        Connection connection = ConnectionManager.getPublisherTransformConnection(serviceId);
+        PreparedStatement ps = null;
+        try {
+
+            String sql = "INSERT INTO resource_field_mappings"
+                    + " (resource_id, resource_type, created_at, version, mappings_json)"
+                    + " VALUES (?, ?, ?, ?, ?)";
+            //note this entity is always inserted, never updated, so there's no handler for errors with an insert, like resource_current
+
+            ps = connection.prepareStatement(sql);
+
+            for (ResourceWrapper wrapper : audits.keySet()) {
+                ResourceFieldMappingAudit audit = audits.get(wrapper);
+                String mappingJson = audit.writeToJson();
+
+                int col = 1;
+                ps.setString(col++, wrapper.getResourceId().toString());
+                ps.setString(col++, wrapper.getResourceType());
+                ps.setTimestamp(col++, new java.sql.Timestamp(wrapper.getCreatedAt().getTime()));
+                ps.setString(col++, wrapper.getVersion().toString());
+                ps.setString(col++, mappingJson);
+
+                ps.addBatch();
+            }
+
+            ps.executeBatch();
+            connection.commit();
+
+        } catch (Exception ex) {
+            connection.rollback();
+            throw ex;
+
+        } finally {
+            if (ps != null) {
+                ps.close();
+            }
+            connection.close();
+        }
+    }
+
+    /**
+     * saves the FHIR resource mappings to the new fhir_mapping_audit table (so it can then be archived to S3 later)
+     */
+    private void saveResourceMappingsNewWay(Map<ResourceWrapper, ResourceFieldMappingAudit> audits, UUID serviceId) throws Exception {
+
+        Connection connection = ConnectionManager.getPublisherTransformConnection(serviceId);
+        PreparedStatement ps = null;
+        try {
+
+            String sql = "INSERT INTO fhir_mapping_audit"
+                    + " (service_id, resource_id, resource_type, version, created_at, mappings_json)"
+                    + " VALUES (?, ?, ?, ?, ?, ?)";
+            //note this entity is always inserted, never updated, so there's no handler for errors with an insert, like resource_current
+
+            ps = connection.prepareStatement(sql);
+
+
+            for (ResourceWrapper wrapper : audits.keySet()) {
+                ResourceFieldMappingAudit audit = audits.get(wrapper);
+                String mappingJson = audit.writeToJson();
+
+                int col = 1;
+                ps.setString(col++, serviceId.toString());
+                ps.setString(col++, wrapper.getResourceId().toString());
+                ps.setString(col++, wrapper.getResourceType());
+                ps.setString(col++, wrapper.getVersion().toString());
+                ps.setTimestamp(col++, new java.sql.Timestamp(wrapper.getCreatedAt().getTime()));
+                ps.setString(col++, mappingJson);
+
+                ps.addBatch();
+            }
+
+            ps.executeBatch();
+            connection.commit();
+
+        } catch (Exception ex) {
+            connection.rollback();
+            throw ex;
+
+        } finally {
+            if (ps != null) {
+                ps.close();
+            }
+            connection.close();
+        }
+    }
+
+    /*public void saveResourceMappings(Map<ResourceWrapper, ResourceFieldMappingAudit> audits) throws Exception {
 
         if (audits == null || audits.isEmpty()) {
             return;
@@ -693,16 +849,6 @@ public class RdbmsSourceFileMappingDal implements SourceFileMappingDalI {
         } else {
             saveResourceMappingsToPublisherTransform(audits);
         }
-
-        /*String auditStoragePath = getAuditStoragePath();
-        if (!Strings.isNullOrEmpty(auditStoragePath)) {
-            //if we have an audit path, write the audits to that
-            saveResourceMappingsToFile(audits, auditStoragePath);
-
-        } else {
-            //if we don't have an audit path, write the audits to the DB
-            saveResourceMappingsToDatabase(audits);
-        }*/
     }
 
     private void saveResourceMappingsToPublisherTransform(Map<ResourceWrapper, ResourceFieldMappingAudit> audits) throws Exception {
@@ -801,8 +947,42 @@ public class RdbmsSourceFileMappingDal implements SourceFileMappingDalI {
         }
 
         return cachedPercentageToSendToFhirAudit.intValue();
-    }
+    }*/
 
+    /**
+     * to minimise any disruption with the new FHIR audit table, continue supporting databases without the new table
+     */
+    private static boolean hasNewTable(UUID serviceId) throws Exception {
+
+        Boolean b = hmDatabasesWithNewAuditTable.get(serviceId);
+        if (b == null) {
+
+            String sql = "SELECT 1"
+                    + " FROM information_schema.TABLES"
+                    + " WHERE TABLE_SCHEMA = DATABASE()"
+                    + " AND TABLE_NAME = 'fhir_mapping_audit'";
+            Connection connection = ConnectionManager.getPublisherTransformConnection(serviceId);
+            PreparedStatement ps = null;
+            try {
+                ps = connection.prepareStatement(sql);
+
+                ResultSet rs = ps.executeQuery();
+                boolean hasTable = rs.next();
+                b = Boolean.valueOf(hasTable);
+                hmDatabasesWithNewAuditTable.put(serviceId, b);
+                LOG.debug("Publisher_transform DB for service " + serviceId + " has new fhir_mapping_audit = " + b);
+
+            } finally {
+                if (ps != null) {
+                    ps.close();
+                }
+                connection.close();
+            }
+
+        }
+        return b.booleanValue();
+
+    }
 }
 
 class AuditWrapper {

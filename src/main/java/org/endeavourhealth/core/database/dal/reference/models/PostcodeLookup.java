@@ -1,7 +1,5 @@
 package org.endeavourhealth.core.database.dal.reference.models;
 
-import org.endeavourhealth.core.database.rdbms.reference.models.RdbmsPostcodeLookup;
-
 public class PostcodeLookup {
 
     private String postcodeNoSpace = null;
@@ -15,22 +13,9 @@ public class PostcodeLookup {
     private String lsoa2011Code = null;
     private String msoa2001Code = null;
     private String msoa2011Code = null;
+    private Double townsendDeprivationScore = null;
     
     public PostcodeLookup() {}
-
-    public PostcodeLookup(RdbmsPostcodeLookup proxy) {
-        this.postcodeNoSpace = proxy.getPostcodeNoSpace();
-        this.postcode = proxy.getPostcode();
-        this.lsoaCode = proxy.getLsoaCode();
-        this.msoaCode = proxy.getMsoaCode();
-        this.wardCode = proxy.getWardCode();
-        this.ccgCode = proxy.getCcgCode();
-        this.localAuthorityCode = proxy.getLocalAuthorityCode();
-        this.lsoa2001Code = proxy.getLsoa2001Code();
-        this.lsoa2011Code = proxy.getLsoa2011Code();
-        this.msoa2001Code = proxy.getMsoa2001Code();
-        this.msoa2011Code = proxy.getMsoa2011Code();
-    }
 
     public String getPostcodeNoSpace() {
         return postcodeNoSpace;
@@ -120,4 +105,11 @@ public class PostcodeLookup {
         this.msoa2011Code = msoa2011Code;
     }
 
+    public Double getTownsendDeprivationScore() {
+        return townsendDeprivationScore;
+    }
+
+    public void setTownsendDeprivationScore(Double townsendDeprivationScore) {
+        this.townsendDeprivationScore = townsendDeprivationScore;
+    }
 }

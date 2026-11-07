@@ -34,6 +34,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class ConnectionManager {
 
+
+
     /**
      * these enums define the known database schemas
      */
@@ -818,6 +820,43 @@ public class ConnectionManager {
                     LOG.error(e.getMessage());
                 }
             }
+        }
+    }
+
+    /**
+     * we use java.util.Date objects in classes, but PreparedStatement and ResultSet deal with java.sql.Timestamp,
+     * so these functions allow easy conversation
+     */
+    public static java.util.Date timestampToDate(java.sql.Timestamp ts) {
+        if (ts == null) {
+            return null;
+        } else {
+            return new java.util.Date(ts.getTime());
+        }
+    }
+    public static java.sql.Timestamp dateToTimestamp(java.util.Date d) {
+        if (d == null) {
+            return null;
+        } else {
+            return new java.sql.Timestamp(d.getTime());
+        }
+    }
+
+    /**
+     * we often need to convert between UUID and Strings for PreparedStatements and ResultSets
+     */
+    public static UUID stringToUuid(String s) {
+        if (s == null) {
+            return null;
+        } else {
+            return UUID.fromString(s);
+        }
+    }
+    public static String uuidToString(UUID uuid) {
+        if (uuid == null) {
+            return null;
+        } else {
+            return uuid.toString();
         }
     }
 }

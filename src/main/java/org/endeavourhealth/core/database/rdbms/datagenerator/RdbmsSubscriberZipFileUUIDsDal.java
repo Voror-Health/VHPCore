@@ -1,31 +1,295 @@
 package org.endeavourhealth.core.database.rdbms.datagenerator;
 
+import org.endeavourhealth.core.database.dal.audit.models.LastDataInSubscriber;
 import org.endeavourhealth.core.database.dal.datagenerator.SubscriberZipFileUUIDsDalI;
-import org.endeavourhealth.core.database.dal.datagenerator.models.RemoteFilingStatistics;
-import org.endeavourhealth.core.database.dal.datagenerator.models.RemoteFilingSubscriber;
+import org.endeavourhealth.core.database.dal.datagenerator.models.RemoteFilingRecord;
 import org.endeavourhealth.core.database.rdbms.ConnectionManager;
-import org.endeavourhealth.core.database.rdbms.datagenerator.models.RdbmsSubscriberZipFileUUIDs;
-import org.hibernate.internal.SessionImpl;
 
-import javax.persistence.EntityManager;
-import javax.persistence.NoResultException;
-import javax.persistence.Query;
-import javax.persistence.TypedQuery;
-import javax.persistence.criteria.CriteriaBuilder;
-import javax.persistence.criteria.CriteriaQuery;
-import javax.persistence.criteria.Root;
-import java.math.BigInteger;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.Types;
 import java.util.ArrayList;
-import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
+import java.util.UUID;
 
 public class RdbmsSubscriberZipFileUUIDsDal implements SubscriberZipFileUUIDsDalI {
 
-    public RdbmsSubscriberZipFileUUIDs getSubscriberZipFileUUIDsEntity(String queuedMessageUUID) throws Exception {
+
+    @Override
+    public synchronized void createSubscriberZipFileUUIDsEntity(int subscriberId, UUID serviceId, UUID systemId, UUID exchangeId, UUID batchId,
+                                                                UUID queuedMessageId, String queuedMessageBody) throws Exception {
+
+        long maxFilingOrder = findMaxFilingOrder();
+
+        Connection connection = ConnectionManager.getDataGeneratorConnection();
+        PreparedStatement ps = null;
+        try {
+            String sql = "INSERT INTO subscriber_zip_file_uuids"
+                    + " (subscriber_id, batch_uuid, queued_message_uuid, queued_message_body, filing_order, service_id, system_id, exchange_id, dt_inserted)"
+                    + " VALUES"
+                    + " (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            ps = connection.prepareStatement(sql);
+
+            int col = 1;
+            ps.setInt(col++, subscriberId);
+            ps.setString(col++, batchId.toString());
+            ps.setString(col++, queuedMessageId.toString());
+            ps.setString(col++, queuedMessageBody);
+            ps.setLong(col++, maxFilingOrder+1);
+            if (serviceId != null) {
+                ps.setString(col++, serviceId.toString());
+            } else {
+                ps.setNull(col++, Types.VARCHAR);
+            }
+            if (systemId != null) {
+                ps.setString(col++, systemId.toString());
+            } else {
+                ps.setNull(col++, Types.VARCHAR);
+            }
+            if (exchangeId != null) {
+                ps.setString(col++, exchangeId.toString());
+            } else {
+                ps.setNull(col++, Types.VARCHAR);
+            }
+            ps.setTimestamp(col++, new java.sql.Timestamp(new Date().getTime()));
+
+            ps.executeUpdate();
+            connection.commit();
+
+        } catch (Exception ex) {
+            connection.rollback();
+            throw ex;
+
+        } finally {
+            if (ps != null) {
+                ps.close();
+            }
+            connection.close();
+        }
+    }
+
+    private long findMaxFilingOrder() throws Exception {
+
+        Connection connection = ConnectionManager.getDataGeneratorConnection();
+        PreparedStatement ps = null;
+        try {
+            String sql = "SELECT MAX(filing_order) FROM subscriber_zip_file_uuids";
+            ps = connection.prepareStatement(sql);
+
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                return rs.getLong(1);
+            } else {
+                return 0;
+            }
+        } finally {
+            if (ps != null) {
+                ps.close();
+            }
+            connection.close();
+        }
+    }
+
+    /**
+     * after writing to the subscriber_zip_file_uuids table with new outbound data, this table may be written to
+     * to log that it's the last message in the set of messages derived from an inbound exchange
+     */
+    @Override
+    public void logLastMessageStaged(int subscriberId, UUID queuedMessageId, LastDataInSubscriber audit) throws Exception {
+        Connection connection = ConnectionManager.getDataGeneratorConnection();
+        PreparedStatement ps = null;
+        try {
+
+            String sql = "INSERT IGNORE INTO last_queued_message_sent"
+                    + " (subscriber_id, queued_message_id, service_id, system_id, exchange_id, extract_date, extract_cutoff)"
+                    + " VALUES (?, ?, ?, ?, ?, ?, ?)";
+            ps = connection.prepareStatement(sql);
+
+            int col = 1;
+            ps.setInt(col++, subscriberId);
+            ps.setString(col++, queuedMessageId.toString());
+            ps.setString(col++, audit.getServiceId().toString());
+            ps.setString(col++, audit.getSystemId().toString());
+            ps.setString(col++, audit.getExchangeId().toString());
+            ps.setTimestamp(col++, new java.sql.Timestamp(audit.getExtractDate().getTime()));
+            ps.setTimestamp(col++, new java.sql.Timestamp(audit.getExtractCutoff().getTime()));
+
+            ps.executeUpdate();
+            connection.commit();
+
+        } catch (Exception ex) {
+            connection.rollback();
+            throw ex;
+
+        } finally {
+            if (ps != null) {
+                ps.close();
+            }
+            connection.close();
+        }
+    }
+
+    @Override
+    public List<LastDataInSubscriber> getLastMessagesWritten(int subscriberId) throws Exception {
+
+        Connection connection = ConnectionManager.getDataGeneratorConnection();
+        PreparedStatement ps = null;
+        try {
+
+            String sql = "SELECT service_id, system_id, exchange_id, extract_date, extract_cutoff, written_date"
+                    + " FROM last_queued_message_sent"
+                    + " WHERE subscriber_id = ?"
+                    + " AND written_date IS NOT NULL";
+            ps = connection.prepareStatement(sql);
+
+            int col = 1;
+            ps.setInt(col++, subscriberId);
+
+            List<LastDataInSubscriber> ret = new ArrayList<>();
+
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+
+                col = 1;
+                LastDataInSubscriber d = new LastDataInSubscriber();
+                d.setServiceId(UUID.fromString(rs.getString(col++)));
+                d.setSystemId(UUID.fromString(rs.getString(col++)));
+                d.setExchangeId(UUID.fromString(rs.getString(col++)));
+                d.setExtractDate(new java.util.Date(rs.getTimestamp(col++).getTime()));
+                d.setExtractCutoff(new java.util.Date(rs.getTimestamp(col++).getTime()));
+                d.setWrittenDate(new java.util.Date(rs.getTimestamp(col++).getTime()));
+
+                ret.add(d);
+            }
+
+            return ret;
+
+        } finally {
+            if (ps != null) {
+                ps.close();
+            }
+            connection.close();
+        }
+    }
+
+    @Override
+    public void deleteLastMessagesWritten(int subscriberId, Date maxWrittenDate) throws Exception {
+        Connection connection = ConnectionManager.getDataGeneratorConnection();
+        PreparedStatement ps = null;
+        try {
+
+            //note, the below explicitly only delete ones OLDER than the date, and skip ones equal. If the feedback processing is happening
+            //when this function is being run, then we don't want to delete anything too soon. There's no harm in leaving
+            //extra records in the last_queued_message_sent table for another day or so.
+            String sql = "DELETE FROM last_queued_message_sent"
+                    + " WHERE subscriber_id = ?"
+                    + " AND written_date IS NOT NULL"
+                    + " AND written_date < ?";
+            ps = connection.prepareStatement(sql);
+
+            int col = 1;
+            ps.setInt(col++, subscriberId);
+            ps.setTimestamp(col++, new java.sql.Timestamp(maxWrittenDate.getTime()));
+
+            ps.executeUpdate();
+            connection.commit();
+
+        } catch (Exception ex) {
+            connection.rollback();
+            throw ex;
+
+        } finally {
+            if (ps != null) {
+                ps.close();
+            }
+            connection.close();
+        }
+    }
+
+    @Override
+    public List<RemoteFilingRecord> getFailures(int subscriberId, int maxRecordsPerService) throws Exception {
+
+        Connection connection = ConnectionManager.getDataGeneratorConnection();
+        PreparedStatement ps = null;
+        try {
+            //we need to find out the distinct services in error first
+            String sql = "SELECT DISTINCT service_id"
+                    + " FROM subscriber_zip_file_uuids"
+                    + " WHERE subscriber_id = ?"
+                    + " AND file_filing_success = 0";
+            ps = connection.prepareStatement(sql);
+
+            int col = 1;
+            ps.setInt(col++, subscriberId);
+
+            List<UUID> serviceIds = new ArrayList<>();
+
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                col = 1;
+                serviceIds.add(ConnectionManager.stringToUuid(rs.getString(col++)));
+            }
+
+            //we're done with this statement
+            ps.close();
+            ps = null;
+
+            //for each service ID found, retrieve the errors (to up the max)
+            List<RemoteFilingRecord> ret = new ArrayList<>();
+
+            for (UUID serviceId: serviceIds) {
+
+                //note, this SQL retrieves all columns EXCEPT the payload Base64
+                sql = "SELECT subscriber_id, batch_uuid, queued_message_uuid, filing_order, file_sent, file_filing_attempted, "
+                        + " filing_failure_message, service_id, system_id, exchange_id, dt_inserted"
+                        + " FROM subscriber_zip_file_uuids"
+                        + " WHERE subscriber_id = ?"
+                        + " AND service_id = ?"
+                        + " AND file_filing_success = 0"
+                        + " ORDER BY dt_inserted DESC" //get newest ones
+                        + " LIMIT ?";
+                ps = connection.prepareStatement(sql);
+
+                col = 1;
+                ps.setInt(col++, subscriberId);
+                ps.setString(col++, ConnectionManager.uuidToString(serviceId));
+                ps.setInt(col++, maxRecordsPerService);
+
+                rs = ps.executeQuery();
+                while (rs.next()) {
+                    col = 1;
+
+                    RemoteFilingRecord r = new RemoteFilingRecord();
+                    r.setSubscriberId(rs.getInt(col++));
+                    r.setBatchId(ConnectionManager.stringToUuid(rs.getString(col++)));
+                    r.setQueuedMessageId(ConnectionManager.stringToUuid(rs.getString(col++)));
+                    r.setFilingOrder(rs.getLong(col++));
+                    r.setDtFileSent(ConnectionManager.timestampToDate(rs.getTimestamp(col++)));
+                    r.setDtFileFilingAttempted(ConnectionManager.timestampToDate(rs.getTimestamp(col++)));
+                    r.setFileFilingSuccess(Boolean.FALSE);
+                    r.setFilingFailureMessage(rs.getString(col++));
+                    r.setServiceId(ConnectionManager.stringToUuid(rs.getString(col++)));
+                    r.setSystemId(ConnectionManager.stringToUuid(rs.getString(col++)));
+                    r.setExchangeId(ConnectionManager.stringToUuid(rs.getString(col++)));
+                    r.setDtInserted(ConnectionManager.timestampToDate(rs.getTimestamp(col++)));
+                    ret.add(r);
+                }
+            }
+
+            return ret;
+
+        } finally {
+            if (ps != null) {
+                ps.close();
+            }
+            connection.close();
+        }
+
+    }
+
+    /*public RdbmsSubscriberZipFileUUIDs getSubscriberZipFileUUIDsEntity(String queuedMessageUUID) throws Exception {
 
         EntityManager entityManager = ConnectionManager.getDataGeneratorEntityManager();
 
@@ -127,81 +391,6 @@ public class RdbmsSubscriberZipFileUUIDsDal implements SubscriberZipFileUUIDsDal
         return ret;
     }
 
-    public synchronized RdbmsSubscriberZipFileUUIDs createSubscriberZipFileUUIDsEntity(RdbmsSubscriberZipFileUUIDs rszfu) throws Exception {
-
-        EntityManager entityManager = ConnectionManager.getDataGeneratorEntityManager();
-
-        try {
-
-            String sql = "select max(filing_order) from data_generator.subscriber_zip_file_uuids;";
-            Query query = entityManager.createNativeQuery(sql);
-            BigInteger bigResult = (BigInteger) query.getSingleResult();
-            Long longResult = bigResult.longValue();
-
-            if (longResult == null) {
-                rszfu.setFilingOrder(1);
-            } else {
-                rszfu.setFilingOrder(longResult + 1);
-            }
-
-            entityManager.getTransaction().begin();
-            entityManager.persist(rszfu);
-            entityManager.getTransaction().commit();
-            return rszfu;
-
-        } catch (Exception ex) {
-
-            entityManager.getTransaction().rollback();
-            throw ex;
-
-        } finally {
-            entityManager.close();
-        }
-    }
-
-    public synchronized RdbmsSubscriberZipFileUUIDs createSubscriberZipFileUUIDsEntity(int subscriberId, String batchId,
-                                                                                       String queuedMessageId,
-                                                                                       String queuedMessageBody) throws Exception {
-
-        EntityManager entityManager = ConnectionManager.getDataGeneratorEntityManager();
-
-        try {
-            RdbmsSubscriberZipFileUUIDs rszfu = new RdbmsSubscriberZipFileUUIDs();
-
-            rszfu.setSubscriberId(subscriberId);
-            rszfu.setBatchUUID(batchId);
-            rszfu.setQueuedMessageUUID(queuedMessageId);
-            rszfu.setQueuedMessageBody(queuedMessageBody);
-
-            String sql = "select max(filing_order) from data_generator.subscriber_zip_file_uuids;";
-            Query query = entityManager.createNativeQuery(sql);
-            BigInteger bigResult = (BigInteger) query.getSingleResult();
-
-            if (bigResult == null) {
-                rszfu.setFilingOrder(1);
-            } else {
-                Long longResult = bigResult.longValue();
-                if (longResult == null) {
-                    rszfu.setFilingOrder(1);
-                } else {
-                    rszfu.setFilingOrder(longResult + 1);
-                }
-            }
-
-            entityManager.getTransaction().begin();
-            entityManager.persist(rszfu);
-            entityManager.getTransaction().commit();
-            return rszfu;
-
-        } catch (Exception ex) {
-
-            entityManager.getTransaction().rollback();
-            throw ex;
-
-        } finally {
-            entityManager.close();
-        }
-    }
 
     @Override
     public List<RemoteFilingSubscriber> getSubscribers() throws Exception {
@@ -402,4 +591,9 @@ public class RdbmsSubscriberZipFileUUIDsDal implements SubscriberZipFileUUIDsDal
             entityManager.close();
         }
     }
+
+
+
+*/
+
 }

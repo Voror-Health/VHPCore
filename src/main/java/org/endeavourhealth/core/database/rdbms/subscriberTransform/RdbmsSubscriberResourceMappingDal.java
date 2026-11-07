@@ -22,7 +22,7 @@ public class RdbmsSubscriberResourceMappingDal implements SubscriberResourceMapp
     private static final String SUBSCRIBER_ID_MAP_SMALL = "subscriber_id_map";
     private static final String SUBSCRIBER_ID_MAP_LARGE = "subscriber_id_map_3";
 
-    private static final String DUPLICATE_KEY_ERR = "Duplicate entry .* for key 'PRIMARY'";
+    private static final String DUPLICATE_KEY_ERR = "Duplicate entry .* for key .*";    // 'PRIMARY'";  SD-1076
 
     private String subscriberConfigName = null;
 
@@ -81,7 +81,9 @@ public class RdbmsSubscriberResourceMappingDal implements SubscriberResourceMapp
     public void findOrCreateEnterpriseIdsOldWay(List<ResourceWrapper> resources, Map<ResourceWrapper, Long> ids) throws Exception {
         //allow several attempts if it fails due to a deadlock
         DeadlockHandler h = new DeadlockHandler();
+        h.setRetryDelayMillis(500); //SD-459 lower the delay from 1s to 500ms to increase throughput
         h.addErrorMessageToHandler(DUPLICATE_KEY_ERR); //due to multi-threading, we may get duplicate key errors, so just try again
+
         while (true) {
             try {
                 tryFindOrCreateEnterpriseIdsOldWay(resources, ids);
@@ -261,7 +263,9 @@ public class RdbmsSubscriberResourceMappingDal implements SubscriberResourceMapp
     public Map<String, SubscriberId> findOrCreateSubscriberIds(byte subscriberTable, List<String> sourceIds) throws Exception {
         //allow several attempts if it fails due to a deadlock
         DeadlockHandler h = new DeadlockHandler();
+        h.setRetryDelayMillis(500); //SD-459 lower the delay from 1s to 500ms to increase throughput
         h.addErrorMessageToHandler(DUPLICATE_KEY_ERR); //due to multi-threading, we may get duplicate key errors, so just try again
+
         while (true) {
             try {
                 return tryFindOrCreateSubscriberIds(subscriberTable, sourceIds);
